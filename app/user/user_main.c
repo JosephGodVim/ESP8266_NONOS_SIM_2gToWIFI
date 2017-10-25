@@ -300,7 +300,7 @@ pcm_intr_handle(void *arg)
 			GPIO_REG_WRITE(GPIO_OUT_W1TC_ADDRESS, 1<<PCM_OUT_NUM);
 		}
 		//GPIO_OUTPUT_SET(GPIO_ID_PIN(PCM_OUT_NUM), GPIO_INPUT_GET(GPIO_ID_PIN(PCM_IN_NUM)));
-		if(clk_cnt == 16)
+		if(clk_cnt == 8)
 		{
 			sync_sta = 0;
 		}
