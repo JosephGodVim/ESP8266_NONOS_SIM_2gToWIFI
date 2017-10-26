@@ -35,9 +35,10 @@
 #include "driver/uart.h"
 #include "gpio.h"
 
-uint8_t key_sta = 1;
-uint8_t sync_sta = 0;
-uint32_t clk_cnt = 0;
+#define QUEUE_SIZE		480
+#define QUEUE_FULL		0
+#define QUEUE_EMPTY		1
+#define QUEUE_TURE		-1
 
 #define PCM_IN_MUX		PERIPHS_IO_MUX_MTMS_U
 #define PCM_IN_NUM		12
@@ -55,8 +56,23 @@ uint32_t clk_cnt = 0;
 #define PCM_SYNC_NUM	4
 #define PCM_SYNC_FUNC	FUNC_GPIO5
 
-LOCAL uint16 r_data[320];
-LOCAL uint16 r_cnt;
+uint8_t key_sta = 1;
+uint8_t sync_sta = 0;
+uint8_t pcm_out_sta = 0;
+uint8_t fifo_pcmout = 0;
+uint32_t clk_cnt = 0;
+uint16_t pcm_writebyte = 0;
+uint16_t pcm_readbyte = 0;
+uint8_t pcmalreadyread = 0;
+
+typedef struct QUEUE{
+	int32_t head;
+	int32_t tail;
+	uint16_t data[QUEUE_SIZE];
+	int32_t cnt	;
+}fifo_queue;
+
+fifo_queue pcm_queue;
 
 #define DEVICE_TYPE 		"gh_9e2cff3dfa51" //wechat public number
 #define DEVICE_ID 			"122475" //model ID
@@ -275,23 +291,73 @@ user_rf_pre_init(void)
 }
 
 void ICACHE_FLASH_ATTR
+queue_init(fifo_queue *queue)
+{
+	queue->head = queue->tail;
+	queue->cnt = 0;
+}
+
+uint8_t ICACHE_FLASH_ATTR
+queue_write(fifo_queue *queue, uint16_t data)
+{
+	if(queue->head == queue->tail && queue->cnt == QUEUE_SIZE)
+	{
+		return QUEUE_FULL;
+	}
+	else
+	{
+		queue->data[queue->tail] = data;
+		queue->tail = (queue->tail+1)%QUEUE_SIZE;
+		queue->cnt++;
+		return QUEUE_TURE;
+	}
+}
+
+uint8_t ICACHE_FLASH_ATTR
+queue_read(fifo_queue queue, uint16_t data)
+{
+	if(queue->head == queue->tail && queue->cnt == 0)
+	{
+		return QUEUE_EMPTY;
+	}
+	else
+	{
+		data = queue->data[queue->head];
+		queue->head = (queue->head+1)%QUEUE_SIZE;
+		queue->cnt--;
+		return QUEUE_TURE;
+	}
+}
+
+void ICACHE_FLASH_ATTR
 pcm_intr_handle(void *arg)
 {
 	uint32 gpio_status;
 	gpio_status = GPIO_REG_READ(GPIO_STATUS_ADDRESS);
-	//os_printf("gpio_status:%02X\r\n", gpio_status);
 	GPIO_REG_WRITE(GPIO_STATUS_W1TC_ADDRESS, gpio_status);
 	if(gpio_status&BIT(PCM_SYNC_NUM))
 	{
-		//os_printf("SYNC\r\n");
 		sync_sta = 1;
 	}
 	else if((gpio_status&BIT(PCM_CLK_NUM))&&sync_sta)
 	{
-		clk_cnt++;
-		//os_printf("CLK\r\n");
-		//os_printf("GPIO_REG:%02X\r\n", GPIO_REG_READ(GPIO_IN_ADDRESS));
-		if(GPIO_INPUT_GET(GPIO_ID_PIN(PCM_IN_NUM)))
+		pcm_out_sta = GPIO_INPUT_GET(GPIO_ID_PIN(PCM_IN_NUM));
+		pcm_writebyte|=pcm_out_sta<<clk_cnt;	//存储在缓存pcm_byte中，
+		if(clk_cnt == 15)
+		{
+			queue_write(&pcm_queue, pcm_writebyte);	//写入fifo队列
+			pcm_writebyte = 0;
+			if(pcm_queue.cnt == 320)
+			{
+				pcmalreadyread = 1;
+			}
+			clk_cnt = 0;
+		}
+		if(pcmalreadyread&&clk_cnt==0)	//写入320byte后，开始从队列读取并通过PCM_OUT输出给M26，只有当clk_cnt=0时，可以读取1个pcm_byte数据
+		{
+			queue_read(&pcm_queue, pcm_readbyte);
+		}
+		if(pcm_readbyte&(uint16_t)1<<clk_cnt)
 		{
 			GPIO_REG_WRITE(GPIO_OUT_W1TS_ADDRESS, 1<<PCM_OUT_NUM);
 		}
@@ -299,17 +365,14 @@ pcm_intr_handle(void *arg)
 		{
 			GPIO_REG_WRITE(GPIO_OUT_W1TC_ADDRESS, 1<<PCM_OUT_NUM);
 		}
-		//GPIO_OUTPUT_SET(GPIO_ID_PIN(PCM_OUT_NUM), GPIO_INPUT_GET(GPIO_ID_PIN(PCM_IN_NUM)));
-		if(clk_cnt == 8)
-		{
-			sync_sta = 0;
-		}
+		clk_cnt++;
 	}
 }
 
 void ICACHE_FLASH_ATTR
 user_init(void)
 {
+	queue_init(&pcm_queue);
 	uart_init(BIT_RATE_115200, BIT_RATE_115200);
 	os_printf("\r\n");
 	os_printf("Thank godsh, you come here!\r\n");
@@ -333,3 +396,5 @@ user_init(void)
 	gpio_pin_intr_state_set(GPIO_ID_PIN(PCM_SYNC_NUM), GPIO_PIN_INTR_POSEDGE);
 	ETS_GPIO_INTR_ENABLE();
 }
+
+
