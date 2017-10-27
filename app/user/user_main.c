@@ -56,14 +56,12 @@
 #define PCM_SYNC_NUM	4
 #define PCM_SYNC_FUNC	FUNC_GPIO5
 
-uint8_t key_sta = 1;
 uint8_t sync_sta = 0;
-uint8_t pcm_out_sta = 0;
+uint16_t pcm_in_sta = 0;
 uint8_t fifo_pcmout = 0;
 uint32_t clk_cnt = 0;
-uint16_t pcm_writebyte = 0;
-uint16_t pcm_readbyte = 0;
-uint8_t pcmalreadyread = 0;
+uint16_t data_inbyte = 0;
+uint16_t data_outbyte = 0;
 
 typedef struct QUEUE{
 	int32_t head;
@@ -293,7 +291,7 @@ user_rf_pre_init(void)
 void ICACHE_FLASH_ATTR
 queue_init(fifo_queue *queue)
 {
-	queue->head = queue->tail;
+	queue->head = queue->tail = 0;
 	queue->cnt = 0;
 }
 
@@ -314,7 +312,7 @@ queue_write(fifo_queue *queue, uint16_t data)
 }
 
 uint8_t ICACHE_FLASH_ATTR
-queue_read(fifo_queue queue, uint16_t data)
+queue_read(fifo_queue *queue, uint16_t *data)
 {
 	if(queue->head == queue->tail && queue->cnt == 0)
 	{
@@ -322,7 +320,7 @@ queue_read(fifo_queue queue, uint16_t data)
 	}
 	else
 	{
-		data = queue->data[queue->head];
+		*data = queue->data[queue->head];
 		queue->head = (queue->head+1)%QUEUE_SIZE;
 		queue->cnt--;
 		return QUEUE_TURE;
@@ -341,31 +339,39 @@ pcm_intr_handle(void *arg)
 	}
 	else if((gpio_status&BIT(PCM_CLK_NUM))&&sync_sta)
 	{
-		pcm_out_sta = GPIO_INPUT_GET(GPIO_ID_PIN(PCM_IN_NUM));
-		pcm_writebyte|=pcm_out_sta<<clk_cnt;	//存储在缓存pcm_byte中，
+		pcm_in_sta = GPIO_INPUT_GET(GPIO_ID_PIN(PCM_IN_NUM));
+		data_inbyte|=pcm_in_sta<<clk_cnt;	//存储在缓存pcm_byte中
 		if(clk_cnt == 15)
 		{
-			queue_write(&pcm_queue, pcm_writebyte);	//写入fifo队列
-			pcm_writebyte = 0;
-			if(pcm_queue.cnt == 320)
+			queue_write(&pcm_queue, data_inbyte);	//写入fifo队列
+			data_inbyte = 0;
+			sync_sta = 0;
+		}
+
+		if(pcm_queue.cnt>320&&clk_cnt==0)	//写入320byte后，开始从队列读取并通过PCM_OUT输出给M26，只有当clk_cnt=0时，可以读取1个pcm_byte数据
+		{
+			fifo_pcmout = 1;
+			queue_read(&pcm_queue, &data_outbyte);
+		}
+		if(fifo_pcmout)
+		{
+			if(!(data_outbyte&1<<clk_cnt))
 			{
-				pcmalreadyread = 1;
+				os_printf("0\r\n");
+				os_printf("%02x\r\n", data_outbyte);
+				GPIO_REG_WRITE(GPIO_OUT_W1TC_ADDRESS, 1<<PCM_OUT_NUM);
 			}
-			clk_cnt = 0;
-		}
-		if(pcmalreadyread&&clk_cnt==0)	//写入320byte后，开始从队列读取并通过PCM_OUT输出给M26，只有当clk_cnt=0时，可以读取1个pcm_byte数据
-		{
-			queue_read(&pcm_queue, pcm_readbyte);
-		}
-		if(pcm_readbyte&(uint16_t)1<<clk_cnt)
-		{
-			GPIO_REG_WRITE(GPIO_OUT_W1TS_ADDRESS, 1<<PCM_OUT_NUM);
-		}
-		else
-		{
-			GPIO_REG_WRITE(GPIO_OUT_W1TC_ADDRESS, 1<<PCM_OUT_NUM);
+			else
+			{
+				os_printf("1\r\n");
+				GPIO_REG_WRITE(GPIO_OUT_W1TS_ADDRESS, 1<<PCM_OUT_NUM);
+			}
 		}
 		clk_cnt++;
+		if(clk_cnt > 15)
+		{
+			clk_cnt = 0;
+		}
 	}
 }
 
