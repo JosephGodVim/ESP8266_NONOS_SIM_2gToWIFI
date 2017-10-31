@@ -60,7 +60,6 @@ uint8_t sync_sta = 0;
 uint16_t pcm_in_sta = 0;
 uint8_t fifo_pcmout = 0;
 uint32_t int_cnt = 0;
-uint32_t out_cnt = 0;
 uint16_t data_inbyte = 0;
 uint16_t data_outbyte = 0;
 
@@ -340,12 +339,10 @@ pcm_intr_handle(void *arg)
 		if(pcm_queue.cnt > 320)
 		{
 			fifo_pcmout = 1;
-			out_cnt = 0;
-			//queue_read(&pcm_queue, &data_outbyte);
 			data_outbyte = pcm_queue.data[pcm_queue.head];
 			pcm_queue.head = (pcm_queue.head+1)%QUEUE_SIZE;
 			pcm_queue.cnt--;
-			if(!(data_outbyte&1<<out_cnt))
+			if(!(data_outbyte&1<<int_cnt))
 			{
 				GPIO_REG_WRITE(GPIO_OUT_W1TC_ADDRESS, 1<<PCM_OUT_NUM);
 			}
@@ -353,47 +350,34 @@ pcm_intr_handle(void *arg)
 			{
 				GPIO_REG_WRITE(GPIO_OUT_W1TS_ADDRESS, 1<<PCM_OUT_NUM);
 			}
-			out_cnt++;
 		}
 	}
 	else if((gpio_status&BIT(PCM_CLK_NUM))&&sync_sta)
 	{
-		if(!GPIO_INPUT_GET(GPIO_ID_PIN(PCM_CLK_NUM)))
+		pcm_in_sta = GPIO_INPUT_GET(GPIO_ID_PIN(PCM_IN_NUM));
+		data_inbyte|=pcm_in_sta<<int_cnt;	//存储在缓存pcm_byte中
+		int_cnt++;
+		if(fifo_pcmout&&int_cnt<13)
 		{
-			pcm_in_sta = GPIO_INPUT_GET(GPIO_ID_PIN(PCM_IN_NUM));
-			data_inbyte|=pcm_in_sta<<int_cnt;	//存储在缓存pcm_byte中
-			int_cnt++;
-			if(int_cnt > 15)
+			if(!(data_outbyte&1<<int_cnt))
 			{
-				//queue_write(&pcm_queue, data_inbyte);	//写入fifo队列
-				pcm_queue.data[pcm_queue.tail] = data_inbyte;
-				pcm_queue.tail = (pcm_queue.tail+1)%QUEUE_SIZE;
-				pcm_queue.cnt++;
-				data_inbyte = 0;
-				sync_sta = 0;
-				int_cnt = 0;
+				GPIO_REG_WRITE(GPIO_OUT_W1TC_ADDRESS, 1<<PCM_OUT_NUM);
+			}
+			else
+			{
+				GPIO_REG_WRITE(GPIO_OUT_W1TS_ADDRESS, 1<<PCM_OUT_NUM);
 			}
 		}
-		else
+		if(int_cnt > 12)
 		{
-			if(fifo_pcmout)
-			{
-				if(!(data_outbyte&1<<out_cnt))
-				{
-					GPIO_REG_WRITE(GPIO_OUT_W1TC_ADDRESS, 1<<PCM_OUT_NUM);
-				}
-				else
-				{
-					GPIO_REG_WRITE(GPIO_OUT_W1TS_ADDRESS, 1<<PCM_OUT_NUM);
-				}
-				out_cnt++;
-				if(out_cnt > 15)
-				{
-					fifo_pcmout = 0;
-				}
-			}
+			pcm_queue.data[pcm_queue.tail] = data_inbyte;
+			pcm_queue.tail = (pcm_queue.tail+1)%QUEUE_SIZE;
+			pcm_queue.cnt++;
+			data_inbyte = 0;
+			int_cnt = 0;
+			sync_sta = 0;
+			fifo_pcmout = 0;
 		}
-
 	}
 }
 
@@ -402,8 +386,6 @@ user_init(void)
 {
 	queue_init(&pcm_queue);
 	uart_init(BIT_RATE_115200, BIT_RATE_115200);
-	os_printf("\r\n");
-	os_printf("Thank godsh, you come here!\r\n");
 	os_printf("SDK version:%s\n", system_get_sdk_version());
 
 	PIN_FUNC_SELECT(PCM_OUT_MUX, PCM_OUT_FUNC);
@@ -420,7 +402,7 @@ user_init(void)
 
 	ETS_GPIO_INTR_DISABLE();
 	ETS_GPIO_INTR_ATTACH(pcm_intr_handle, NULL);
-	gpio_pin_intr_state_set(GPIO_ID_PIN(PCM_CLK_NUM), GPIO_PIN_INTR_ANYEDGE);
+	gpio_pin_intr_state_set(GPIO_ID_PIN(PCM_CLK_NUM), GPIO_PIN_INTR_NEGEDGE);
 	gpio_pin_intr_state_set(GPIO_ID_PIN(PCM_SYNC_NUM), GPIO_PIN_INTR_POSEDGE);
 	ETS_GPIO_INTR_ENABLE();
 }
