@@ -336,9 +336,8 @@ pcm_intr_handle(void *arg)
 	if(gpio_status&BIT(PCM_SYNC_NUM))
 	{
 		sync_sta = 1;
-		if(pcm_queue.cnt > 320)
+		if(pcm_queue.cnt > 150&&int_cnt == 0)
 		{
-			fifo_pcmout = 1;
 			data_outbyte = pcm_queue.data[pcm_queue.head];
 			pcm_queue.head = (pcm_queue.head+1)%QUEUE_SIZE;
 			pcm_queue.cnt--;
@@ -350,33 +349,38 @@ pcm_intr_handle(void *arg)
 			{
 				GPIO_REG_WRITE(GPIO_OUT_W1TS_ADDRESS, 1<<PCM_OUT_NUM);
 			}
+			fifo_pcmout = 1;
 		}
 	}
-	else if((gpio_status&BIT(PCM_CLK_NUM))&&sync_sta)
+	else
 	{
-		pcm_in_sta = GPIO_INPUT_GET(GPIO_ID_PIN(PCM_IN_NUM));
-		data_inbyte|=pcm_in_sta<<int_cnt;	//´æ´¢ÔÚ»º´æpcm_byteÖÐ
-		int_cnt++;
-		if(fifo_pcmout&&int_cnt<13)
+		if(sync_sta)
 		{
-			if(!(data_outbyte&1<<int_cnt))
+			pcm_in_sta = GPIO_INPUT_GET(GPIO_ID_PIN(PCM_IN_NUM));
+			data_inbyte|=pcm_in_sta<<int_cnt;	//´æ´¢ÔÚ»º´æpcm_byteÖÐ
+			int_cnt++;
+			if(fifo_pcmout)
 			{
+				if(!(data_outbyte&1<<int_cnt))
+				{
+					GPIO_REG_WRITE(GPIO_OUT_W1TC_ADDRESS, 1<<PCM_OUT_NUM);
+				}
+				else
+				{
+					GPIO_REG_WRITE(GPIO_OUT_W1TS_ADDRESS, 1<<PCM_OUT_NUM);
+				}
+			}
+			if(int_cnt > 13)
+			{
+				pcm_queue.data[pcm_queue.tail] = data_inbyte;
+				pcm_queue.tail = (pcm_queue.tail+1)%QUEUE_SIZE;
+				pcm_queue.cnt++;
+				data_inbyte = 0;
+				int_cnt = 0;
+				sync_sta = 0;
+				fifo_pcmout = 0;
 				GPIO_REG_WRITE(GPIO_OUT_W1TC_ADDRESS, 1<<PCM_OUT_NUM);
 			}
-			else
-			{
-				GPIO_REG_WRITE(GPIO_OUT_W1TS_ADDRESS, 1<<PCM_OUT_NUM);
-			}
-		}
-		if(int_cnt > 12)
-		{
-			pcm_queue.data[pcm_queue.tail] = data_inbyte;
-			pcm_queue.tail = (pcm_queue.tail+1)%QUEUE_SIZE;
-			pcm_queue.cnt++;
-			data_inbyte = 0;
-			int_cnt = 0;
-			sync_sta = 0;
-			fifo_pcmout = 0;
 		}
 	}
 }
