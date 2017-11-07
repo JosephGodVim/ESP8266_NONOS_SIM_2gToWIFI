@@ -226,7 +226,7 @@ void ICACHE_FLASH_ATTR spi_slave_test()
     // Set spi interrupt information.
     SpiIntInfo spiInt;
     spiInt.src = (SpiIntSrc_TransDone 
-        | SpiIntSrc_WrStaDone 
+        |SpiIntSrc_WrStaDone 
         |SpiIntSrc_RdStaDone 
         |SpiIntSrc_WrBufDone 
         |SpiIntSrc_RdBufDone);
